@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Simple in-memory cache (use Redis in production!)
-const geocodeCache = new Map<string, { data: any; timestamp: number }>();
+interface GeocodeResult {
+  neighborhood?: string;
+  city?: string;
+  county?: string;
+  state?: string;
+  postal_code?: string;
+  display_name?: string;
+}
+
+type CacheEntry<T> = { data: T; timestamp: number };
+
+const geocodeCache = new Map<string, CacheEntry<GeocodeResult>>();
+
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Rate limiting per IP
