@@ -4,6 +4,14 @@ import React, { useEffect, useCallback, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 import { Location, Cluster, ClusterWithLocation } from "../interfaces";
 
+interface GeocodingResult {
+  neighborhood?: string;
+  city?: string;
+  county?: string;
+  state?: string;
+  postal_code?: string;
+}
+
 interface DataFetcherProps {
   setLocations: React.Dispatch<React.SetStateAction<Location[]>>;
   setClusters: React.Dispatch<React.SetStateAction<ClusterWithLocation[]>>;
@@ -13,11 +21,11 @@ interface DataFetcherProps {
 }
 
 // In-memory cache for geocoded results
-const geocodeCache = new Map<string, any>();
+const geocodeCache = new Map<string, GeocodingResult>();
 
 // Rate limiter for API calls
 class RateLimiter {
-  private queue: Array<() => Promise<any>> = [];
+  private queue: Array<() => Promise<void>> = [];
   private processing = false;
   private lastCallTime = 0;
   private minInterval = 1100; // Nominatim requires 1 req/sec, we use 1.1s to be safe
@@ -228,8 +236,8 @@ export const DataFetcher: React.FC<DataFetcherProps> = ({
           });
         }
       }
-    } catch (error: any) {
-      if (error.name === "AbortError") {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
         console.log("Fetch aborted");
         return;
       }
