@@ -29,5 +29,11 @@
     "eslint-config-next": "15.5.4",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+  "react-leaflet-cluster": {
+    "react-leaflet": "5.0.0"
   }
+}
+
 }
