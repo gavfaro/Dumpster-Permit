@@ -13,11 +13,18 @@ interface DataFetcherProps {
   activeTab: "locations" | "clusters";
 }
 
-// Helper interface for concurrent geocoding results
+interface ReverseGeocodeData {
+  neighborhood?: string;
+  city?: string;
+  county?: string;
+  state?: string;
+  postal_code?: string;
+}
+
 interface GeocodeResult {
   clusterId: number;
   jobType: string;
-  data: any; // Raw geocoding data structure
+  data: ReverseGeocodeData;
 }
 
 /**
