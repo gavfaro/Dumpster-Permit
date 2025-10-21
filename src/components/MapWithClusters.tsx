@@ -7,7 +7,6 @@ import {
   Marker,
   Tooltip,
   useMap,
-  CircleMarker,
 } from "react-leaflet";
 import L from "leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
@@ -994,11 +993,6 @@ const MapWithClusters = () => {
   const handleClusterClick = (cluster: ClusterWithLocation) => {
     setSelectedCluster(cluster);
     setSelectedLocation(null);
-  };
-
-  const handleMapClick = () => {
-    setSelectedLocation(null);
-    setSelectedCluster(null);
   };
 
   return (
