@@ -12,6 +12,8 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
   cluster,
   onClose,
 }) => {
+  const [showAll, setShowAll] = React.useState(false);
+
   if (!cluster) return null;
 
   const copyToClipboard = (text: string) => {
@@ -23,8 +25,6 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
     document.body.removeChild(tempInput);
     console.log(`Copied to clipboard: ${text}`);
   };
-
-  const [showAll, setShowAll] = React.useState(false);
 
   const getMarketingAreas = () => {
     const areas: { type: string; name: string; icon: string }[] = [];
