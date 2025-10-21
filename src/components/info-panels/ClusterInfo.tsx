@@ -8,10 +8,6 @@ interface ClusterInfoProps {
   onClose: () => void;
 }
 
-/**
- * Displays detailed information about a selected permit cluster,
- * focusing on geographical marketing opportunities.
- */
 export const ClusterInfo: React.FC<ClusterInfoProps> = ({
   cluster,
   onClose,
@@ -19,36 +15,32 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
   if (!cluster) return null;
 
   const copyToClipboard = (text: string) => {
-    // Using execCommand for better compatibility within iFrames/Canvas environments
     const tempInput = document.createElement("input");
     tempInput.value = text;
     document.body.appendChild(tempInput);
     tempInput.select();
     document.execCommand("copy");
     document.body.removeChild(tempInput);
-    // Optional: Add a visual cue to the user (e.g., a short toast message)
     console.log(`Copied to clipboard: ${text}`);
   };
+
+  const [showAll, setShowAll] = React.useState(false);
 
   const getMarketingAreas = () => {
     const areas: { type: string; name: string; icon: string }[] = [];
 
-    // Add unique neighborhoods
     cluster.neighborhoods?.forEach((neighborhood) => {
       areas.push({ type: "neighborhood", name: neighborhood, icon: "🏘️" });
     });
 
-    // Add unique cities
     cluster.cities?.forEach((city) => {
       areas.push({ type: "city", name: city, icon: "🏙️" });
     });
 
-    // Add counties
     cluster.counties?.forEach((county) => {
       areas.push({ type: "county", name: county, icon: "🗺️" });
     });
 
-    // Add postal codes
     cluster.postal_codes?.forEach((code) => {
       areas.push({ type: "zip", name: code, icon: "📮" });
     });
@@ -59,7 +51,7 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
   const marketingAreas = getMarketingAreas();
 
   return (
-    <div className="absolute top-4 right-4 z-[1000] w-full max-w-md p-6 bg-white rounded-2xl shadow-xl border border-gray-200 backdrop-blur-sm bg-white/80 transition-transform duration-300 ease-out">
+    <div className="absolute top-4 right-4 z-[1000] w-full max-w-md p-6 bg-white rounded-2xl shadow-xl border border-gray-200 backdrop-blur-sm bg-white/80 transition-transform duration-300 ease-out max-h-[90vh] overflow-y-auto">
       <button
         onClick={onClose}
         className="absolute top-3 right-3 text-gray-500 hover:text-gray-800 transition-colors p-1 rounded-full hover:bg-gray-100"
@@ -216,13 +208,59 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
           )}
         </div>
 
+        {/* Keywords Section - with Show More / Show Less toggle */}
+        {cluster.keywords && cluster.keywords.length > 0 && (
+          <div className="border-t border-gray-200 pt-4">
+            <h3 className="text-xs uppercase font-semibold text-gray-400 mb-3 flex items-center gap-2">
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+                />
+              </svg>
+              Common Project Keywords ({cluster.keywords.length})
+            </h3>
+
+            {/* show more/less state */}
+            <div className="flex flex-wrap gap-2">
+              {(showAll ? cluster.keywords : cluster.keywords.slice(0, 15)).map(
+                (keyword, index) => (
+                  <span
+                    key={index}
+                    className="bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 px-2.5 py-1 rounded-md text-xs border border-blue-200 hover:border-blue-300 transition-colors"
+                  >
+                    {keyword}
+                  </span>
+                )
+              )}
+
+              {cluster.keywords.length > 15 && (
+                <button
+                  onClick={() => setShowAll(!showAll)}
+                  className="text-xs text-blue-600 hover:underline px-2 py-1"
+                >
+                  {showAll
+                    ? "Show less"
+                    : `+${cluster.keywords.length - 15} more`}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Ad Platform Quick Links */}
         <div className="border-t border-gray-200 pt-4">
           <h3 className="text-xs uppercase font-semibold text-gray-400 mb-3">
             Create Ads on These Platforms
           </h3>
           <div className="grid grid-cols-2 gap-2">
-            {/* Google Ads */}
             <a
               href="https://ads.google.com"
               target="_blank"
@@ -240,7 +278,6 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
                 Google Ads
               </span>
             </a>
-            {/* Facebook Ads */}
             <a
               href="https://www.facebook.com/business/ads"
               target="_blank"
@@ -258,7 +295,6 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
                 Facebook
               </span>
             </a>
-            {/* Nextdoor */}
             <a
               href="https://business.nextdoor.com"
               target="_blank"
@@ -276,7 +312,6 @@ export const ClusterInfo: React.FC<ClusterInfoProps> = ({
                 Nextdoor
               </span>
             </a>
-            {/* Yelp Ads */}
             <a
               href="https://www.yelp.com/advertise"
               target="_blank"
