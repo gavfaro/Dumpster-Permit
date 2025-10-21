@@ -7,7 +7,6 @@ import {
   Marker,
   Tooltip,
   useMap,
-  CircleMarker,
 } from "react-leaflet";
 import L from "leaflet";
 import MarkerClusterGroup from "@changey/react-leaflet-markercluster";
@@ -172,11 +171,11 @@ const DataFetcher = ({
         // Now we have actual location coordinates from each cluster!
         const clustersWithLocations = await Promise.all(
           data.map(async (cluster) => {
-            let neighborhoods = new Set<string>();
-            let cities = new Set<string>();
-            let states = new Set<string>();
-            let counties = new Set<string>();
-            let postal_codes = new Set<string>();
+            const neighborhoods = new Set<string>();
+            const cities = new Set<string>();
+            const states = new Set<string>();
+            const counties = new Set<string>();
+            const postal_codes = new Set<string>();
 
             // Use the actual location coordinates returned from the cluster
             if (cluster.location_coords && cluster.location_coords.length > 0) {
