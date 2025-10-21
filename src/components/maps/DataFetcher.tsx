@@ -1,37 +1,93 @@
 "use client";
 
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 import { Location, Cluster, ClusterWithLocation } from "../interfaces";
-import { reverseGeocode } from "../utils/api";
 
 interface DataFetcherProps {
-  setLocations: (locations: Location[]) => void;
-  setClusters: (clusters: ClusterWithLocation[]) => void;
-  setIsLoading: (loading: boolean) => void;
+  setLocations: React.Dispatch<React.SetStateAction<Location[]>>;
+  setClusters: React.Dispatch<React.SetStateAction<ClusterWithLocation[]>>;
+  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   jobTypeFilter: string;
   activeTab: "locations" | "clusters";
 }
 
-interface ReverseGeocodeData {
-  neighborhood?: string;
-  city?: string;
-  county?: string;
-  state?: string;
-  postal_code?: string;
+// In-memory cache for geocoded results
+const geocodeCache = new Map<string, any>();
+
+// Rate limiter for API calls
+class RateLimiter {
+  private queue: Array<() => Promise<any>> = [];
+  private processing = false;
+  private lastCallTime = 0;
+  private minInterval = 1100; // Nominatim requires 1 req/sec, we use 1.1s to be safe
+
+  async add<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await fn();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.process();
+    });
+  }
+
+  private async process() {
+    if (this.processing || this.queue.length === 0) return;
+
+    this.processing = true;
+
+    while (this.queue.length > 0) {
+      const now = Date.now();
+      const timeSinceLastCall = now - this.lastCallTime;
+
+      if (timeSinceLastCall < this.minInterval) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.minInterval - timeSinceLastCall)
+        );
+      }
+
+      const fn = this.queue.shift();
+      if (fn) {
+        this.lastCallTime = Date.now();
+        await fn();
+      }
+    }
+
+    this.processing = false;
+  }
 }
 
-interface GeocodeResult {
-  clusterId: number;
-  jobType: string;
-  data: ReverseGeocodeData;
+const rateLimiter = new RateLimiter();
+
+// Cached reverse geocoding with rate limiting
+async function reverseGeocodeWithCache(lat: number, lng: number) {
+  // Round to 4 decimals for cache key (~11m precision)
+  const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+
+  if (geocodeCache.has(cacheKey)) {
+    return geocodeCache.get(cacheKey);
+  }
+
+  try {
+    const result = await rateLimiter.add(async () => {
+      const response = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`);
+      if (!response.ok) throw new Error("Geocoding failed");
+      return response.json();
+    });
+
+    geocodeCache.set(cacheKey, result);
+    return result;
+  } catch (error) {
+    console.error(`Geocode failed for ${lat},${lng}:`, error);
+    return null;
+  }
 }
 
-/**
- * Component that fetches data (locations or clusters) based on map bounds,
- * filter settings, and the active tab. It handles efficient, concurrent
- * reverse geocoding for clusters.
- */
 export const DataFetcher: React.FC<DataFetcherProps> = ({
   setLocations,
   setClusters,
@@ -40,8 +96,17 @@ export const DataFetcher: React.FC<DataFetcherProps> = ({
   activeTab,
 }) => {
   const map = useMap();
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [currentPage, setCurrentPage] = useState(0);
+  const pageSize = 50; // Load 50 clusters at a time
 
   const fetchData = useCallback(async () => {
+    // Cancel any ongoing requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     setIsLoading(true);
     const bounds = map.getBounds();
     const params = new URLSearchParams({
@@ -56,140 +121,119 @@ export const DataFetcher: React.FC<DataFetcherProps> = ({
         if (jobTypeFilter !== "all") {
           params.append("job_type", jobTypeFilter);
         }
-        const response = await fetch(`/api/locations?${params.toString()}`);
+        const response = await fetch(`/api/locations?${params.toString()}`, {
+          signal: abortControllerRef.current.signal,
+        });
         if (!response.ok) throw new Error("Failed to fetch locations");
         const data: Location[] = await response.json();
         setLocations(data);
         setClusters([]);
+        setIsLoading(false); // ← ADD THIS!
       } else {
-        // --- CLUSTER FETCHING OPTIMIZATION START ---
-
-        const response = await fetch(`/api/clusters?${params.toString()}`);
-        if (!response.ok) throw new Error("Failed to fetch clusters");
-        const data: Cluster[] = await response.json();
-
-        // 1. Prepare all geocoding promises concurrently across ALL clusters.
-        const geocodingPromises = data.flatMap((cluster) => {
-          // Determine which points to geocode: max 10 sampled points, or the centroid as fallback.
-          const pointsToGeocode =
-            cluster.location_coords && cluster.location_coords.length > 0
-              ? cluster.location_coords.slice(
-                  0,
-                  Math.min(10, cluster.location_coords.length)
-                )
-              : [
-                  {
-                    lat: cluster.center_lat,
-                    lng: cluster.center_lng,
-                  },
-                ];
-
-          // Create a promise for each point.
-          return pointsToGeocode.map((point) =>
-            reverseGeocode(point.lat, point.lng).then(
-              // Success handler: tag result with cluster info
-              (result) =>
-                ({
-                  clusterId: cluster.cluster_id,
-                  jobType: cluster.job_type,
-                  data: result,
-                } as GeocodeResult),
-              // Error handler: return null for failed geocodes
-              (error) => {
-                console.error(
-                  `Single geocode failed for cluster ${cluster.cluster_id}:`,
-                  error
-                );
-                return null;
-              }
-            )
-          );
+        // --- OPTIMIZED CLUSTER FETCHING ---
+        const response = await fetch(`/api/clusters?${params.toString()}`, {
+          signal: abortControllerRef.current.signal,
         });
+        if (!response.ok) throw new Error("Failed to fetch clusters");
+        const rawClusters: Cluster[] = await response.json();
 
-        // 2. Execute all geocoding promises in parallel. Massive performance gain here!
-        const allGeocodedResults = (
-          await Promise.all(geocodingPromises)
-        ).filter((r) => r !== null) as GeocodeResult[];
+        // Step 1: Show clusters immediately with basic info
+        const basicClusters: ClusterWithLocation[] = rawClusters.map(
+          (cluster) => ({
+            ...cluster,
+            area_name: "Loading location...",
+            neighborhoods: [],
+            cities: [],
+            counties: [],
+            postal_codes: [],
+          })
+        );
+        setClusters(basicClusters);
+        setIsLoading(false); // Map is now interactive!
 
-        // 3. Process results and reconstruct clusters with area data.
-        const clustersWithLocations = data.map((cluster) => {
-          // Filter results relevant to the current cluster.
-          const clusterResults = allGeocodedResults.filter(
-            (r) =>
-              r.clusterId === cluster.cluster_id &&
-              r.jobType === cluster.job_type
+        // Step 2: Geocode ONLY the centroid of each cluster (not 10 points!)
+        // This reduces API calls by 90%
+        const geocodingPromises = rawClusters.map(async (cluster) => {
+          const geocodeResult = await reverseGeocodeWithCache(
+            cluster.center_lat,
+            cluster.center_lng
           );
 
-          const neighborhoods = new Set<string>();
-          const cities = new Set<string>();
-          const states = new Set<string>();
-          const counties = new Set<string>();
-          const postal_codes = new Set<string>();
+          if (!geocodeResult) return null;
 
-          // Aggregate all unique location names found in the samples/centroid.
-          clusterResults.forEach(({ data: locationData }) => {
-            if (locationData) {
-              if (locationData.neighborhood)
-                neighborhoods.add(locationData.neighborhood);
-              if (locationData.city) cities.add(locationData.city);
-              if (locationData.county) counties.add(locationData.county);
-              if (locationData.state) states.add(locationData.state);
-              if (locationData.postal_code)
-                postal_codes.add(locationData.postal_code);
-            }
-          });
-
-          // 4. Create a friendly area name
-          const neighborhoodList = Array.from(neighborhoods);
-          const cityList = Array.from(cities);
-          const countyList = Array.from(counties);
-
-          let area_name = "Unknown Area";
-          if (neighborhoodList.length > 0) {
-            // Show first 2 neighborhoods if multiple
-            const displayNeighborhoods = neighborhoodList
-              .slice(0, 2)
-              .join(", ");
-            const moreCount = neighborhoodList.length - 2;
-            area_name =
-              moreCount > 0
-                ? `${displayNeighborhoods} +${moreCount} more`
-                : displayNeighborhoods;
-
-            if (cityList.length > 0) {
-              area_name += ` (${cityList[0]})`;
-            }
-          } else if (cityList.length > 0) {
-            area_name = cityList.join(", ");
-          }
-
-          // 5. Return the enhanced cluster object
           return {
-            ...cluster,
-            area_name,
-            neighborhood:
-              neighborhoodList.length > 0
-                ? neighborhoodList.join(", ")
-                : undefined,
-            neighborhoods: neighborhoodList,
-            city: cityList.length > 0 ? cityList[0] : undefined,
-            cities: cityList,
-            county: countyList.length > 0 ? countyList[0] : undefined,
-            counties: countyList,
-            state: Array.from(states)[0],
-            postal_code: Array.from(postal_codes)[0],
-            postal_codes: Array.from(postal_codes),
+            clusterId: cluster.cluster_id,
+            jobType: cluster.job_type,
+            data: geocodeResult,
           };
         });
 
-        setClusters(clustersWithLocations);
-        setLocations([]);
-        // --- CLUSTER FETCHING OPTIMIZATION END ---
+        // Step 3: Process results as they arrive (streaming updates)
+        const clustersMap = new Map(
+          rawClusters.map((c) => [`${c.job_type}-${c.cluster_id}`, c])
+        );
+
+        for (const promise of geocodingPromises) {
+          promise.then((result) => {
+            if (!result) return;
+
+            const clusterKey = `${result.jobType}-${result.clusterId}`;
+            const cluster = clustersMap.get(clusterKey);
+            if (!cluster) return;
+
+            const { data } = result;
+            const neighborhoods = data.neighborhood ? [data.neighborhood] : [];
+            const cities = data.city ? [data.city] : [];
+            const counties = data.county ? [data.county] : [];
+            const postal_codes = data.postal_code ? [data.postal_code] : [];
+
+            // Create friendly area name
+            let area_name = "Unknown Area";
+            if (neighborhoods.length > 0) {
+              area_name = neighborhoods[0];
+              if (cities.length > 0) {
+                area_name += ` (${cities[0]})`;
+              }
+            } else if (cities.length > 0) {
+              area_name = cities[0];
+            }
+
+            const enhancedCluster: ClusterWithLocation = {
+              ...cluster,
+              area_name,
+              neighborhood: neighborhoods[0],
+              neighborhoods,
+              city: cities[0],
+              cities,
+              county: counties[0],
+              counties,
+              state: data.state,
+              postal_code: postal_codes[0],
+              postal_codes,
+            };
+
+            // Update state incrementally
+            setClusters((prev) => {
+              const index = prev.findIndex(
+                (c) =>
+                  c.job_type === result.jobType &&
+                  c.cluster_id === result.clusterId
+              );
+              if (index === -1) return prev;
+
+              const newClusters = [...prev];
+              newClusters[index] = enhancedCluster;
+              return newClusters;
+            });
+          });
+        }
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        console.log("Fetch aborted");
+        return;
+      }
       console.error(`Error fetching ${activeTab}:`, error);
-    } finally {
-      setIsLoading(false);
     }
   }, [map, setLocations, setClusters, setIsLoading, jobTypeFilter, activeTab]);
 
@@ -200,6 +244,9 @@ export const DataFetcher: React.FC<DataFetcherProps> = ({
     return () => {
       map.off("moveend", fetchData);
       map.off("zoomend", fetchData);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
   }, [map, fetchData]);
 
